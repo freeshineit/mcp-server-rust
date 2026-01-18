@@ -7,8 +7,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 
 pub struct McpServer {
-    tools: HashMap<String, Tool>,
-    resources: Vec<Resource>,
+    pub tools: HashMap<String, Tool>,
+    pub resources: Vec<Resource>,
 }
 
 impl McpServer {
