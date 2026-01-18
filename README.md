@@ -17,5 +17,6 @@ cargo run -- list-resources
 # test
 python3 test_client.py 
 
-# deploy
+# docker deploy
+docker-compose -f docker-compose.yml up -d
 ```
