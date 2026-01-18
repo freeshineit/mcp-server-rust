@@ -85,7 +85,7 @@ impl McpServer {
 
     pub async fn start(&self, addr: &str) -> Result<()> {
         let listener = TcpListener::bind(addr).await?;
-        println!("MCP Server 监听在 {}", addr);
+        println!("MCP Server 监听在 http://{}", addr);
 
         loop {
             let (socket, _) = listener.accept().await?;
