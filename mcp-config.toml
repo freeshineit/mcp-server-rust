@@ -1,0 +1,19 @@
+# mcp-config.toml
+[server]
+name = "rust-mcp-server"
+version = "0.1.0"
+description = "Rust 实现的 MCP 服务器"
+
+[tools.search_files]
+description = "搜索文件系统中的文件"
+pattern = "*.{txt,log,md}"
+directory = "/home/user"
+
+[tools.get_weather]
+description = "获取城市天气信息"
+
+[resources]
+files = [
+    "/etc/hosts",
+    "/var/log/system.log"
+]
