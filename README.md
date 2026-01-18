@@ -1,3 +1,9 @@
+# mcp-server-rust
+
+![build](https://github.com/freeshineit/mcp-server-rust/workflows/Rust/badge.svg)
+
+## Use
+
 ```bash
 # 构建项目
 cargo build --release
