@@ -1,7 +1,7 @@
 # Dockerfile
-FROM rust:1.70 as builder
+FROM rust:1.92 as builder
 
-WORKDIR /usr/src/mcp-server
+WORKDIR ./mcp-server-rust
 COPY . .
 
 RUN cargo build --release
@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /usr/src/mcp-server/target/release/mcp-server-rust /usr/local/bin/mcp-server
+COPY --from=builder ./mcp-server-rust/target/release/mcp-server-rust /usr/local/bin/mcp-server
 
 EXPOSE 8080
 
