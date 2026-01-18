@@ -1,6 +1,6 @@
 # mcp-config.toml
 [server]
-name = "rust-mcp-server"
+name = "mcp-server-rust"
 version = "0.1.0"
 description = "Rust 实现的 MCP 服务器"
 
