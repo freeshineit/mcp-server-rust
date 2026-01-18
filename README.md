@@ -13,4 +13,9 @@ cargo run -- list-tools
 
 # 列出资源
 cargo run -- list-resources
+
+# test
+python3 test_client.py 
+
+# deploy
 ```
