@@ -1,104 +1,94 @@
-// src/server.rs
+//! # MCP Server Core
+//!
+//! Implements the TCP server and JSON-RPC 2.0 protocol handling.
+//! Manages client connections and dispatches requests to tools and resources.
+
 use crate::models::*;
-use anyhow::{Context, Result};
+use crate::tools::ToolRegistry;
+use crate::resources::ResourceRegistry;
+use anyhow::Result;
 use serde_json::Value;
-use std::collections::HashMap;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 
+/// The main MCP Server
+///
+/// Manages tool and resource registries and handles client connections.
 pub struct McpServer {
-    pub tools: HashMap<String, Tool>,
-    pub resources: Vec<Resource>,
+    /// Registry of all available tools
+    pub tool_registry: ToolRegistry,
+    /// Registry of all available resources
+    pub resource_registry: ResourceRegistry,
 }
 
 impl McpServer {
+    /// Creates a new MCP Server instance
+    ///
+    /// Initializes the server with built-in tools and resources.
+    ///
+    /// # Returns
+    ///
+    /// A new `McpServer` instance with default tools and resources
     pub fn new() -> Self {
-        let mut tools = HashMap::new();
+        let tool_registry = ToolRegistry::new();
+        let resource_registry = ResourceRegistry::new();
 
-        // 注册示例工具
-        tools.insert(
-            "search_files".to_string(),
-            Tool {
-                name: "search_files".to_string(),
-                description: "在文件系统中搜索文件".to_string(),
-                input_schema: ToolInputSchema {
-                    type_: "object".to_string(),
-                    properties: {
-                        let mut map = HashMap::new();
-                        map.insert(
-                            "pattern".to_string(),
-                            Property {
-                                type_: "string".to_string(),
-                                description: "搜索模式（支持通配符）".to_string(),
-                            },
-                        );
-                        map.insert(
-                            "directory".to_string(),
-                            Property {
-                                type_: "string".to_string(),
-                                description: "搜索目录".to_string(),
-                            },
-                        );
-                        map
-                    },
-                    required: vec!["pattern".to_string()],
-                },
-            },
-        );
-
-        tools.insert(
-            "get_weather".to_string(),
-            Tool {
-                name: "get_weather".to_string(),
-                description: "获取天气信息".to_string(),
-                input_schema: ToolInputSchema {
-                    type_: "object".to_string(),
-                    properties: {
-                        let mut map = HashMap::new();
-                        map.insert(
-                            "city".to_string(),
-                            Property {
-                                type_: "string".to_string(),
-                                description: "城市名称".to_string(),
-                            },
-                        );
-                        map
-                    },
-                    required: vec!["city".to_string()],
-                },
-            },
-        );
-
-        let resources = vec![
-            Resource {
-                uri: "file:///etc/hosts".to_string(),
-                mime_type: "text/plain".to_string(),
-            },
-            Resource {
-                uri: "file:///var/log/system.log".to_string(),
-                mime_type: "text/plain".to_string(),
-            },
-        ];
-
-        McpServer { tools, resources }
+        McpServer {
+            tool_registry,
+            resource_registry,
+        }
     }
 
+    /// Starts the TCP server and listens for client connections
+    ///
+    /// Binds to the specified address and accepts connections in a loop.
+    /// Each connection is handled in a separate async task.
+    ///
+    /// # Arguments
+    ///
+    /// * `addr` - The address to bind to (e.g., "127.0.0.1:8080")
+    ///
+    /// # Returns
+    ///
+    /// Returns `Result<()>` with error if binding fails
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let server = McpServer::new();
+    /// server.start("127.0.0.1:8080").await?;
+    /// ```
     pub async fn start(&self, addr: &str) -> Result<()> {
         let listener = TcpListener::bind(addr).await?;
         println!("MCP Server 监听在 {}", addr);
 
         loop {
             let (socket, _) = listener.accept().await?;
-            let server_clone = self.clone();
+            let tool_registry = self.clone_tool_registry();
+            let resource_registry = self.clone_resource_registry();
+            
             tokio::spawn(async move {
-                if let Err(e) = server_clone.handle_connection(socket).await {
+                if let Err(e) = Self::handle_connection(socket, tool_registry, resource_registry).await {
                     eprintln!("处理连接失败: {}", e);
                 }
             });
         }
     }
 
-    async fn handle_connection(&self, mut socket: TcpStream) -> Result<()> {
+    /// Handles a single client connection
+    ///
+    /// Reads JSON-RPC messages line by line and processes them.
+    ///
+    /// # Arguments
+    ///
+    /// * `socket` - The TCP socket for communication
+    /// * `tool_registry` - Registry of available tools
+    /// * `resource_registry` - Registry of available resources
+    async fn handle_connection(
+        mut socket: TcpStream,
+        tool_registry: ToolRegistry,
+        resource_registry: ResourceRegistry,
+    ) -> Result<()> {
         let (reader, mut writer) = socket.split();
         let mut reader = BufReader::new(reader);
         let mut buffer = String::new();
@@ -106,7 +96,7 @@ impl McpServer {
         while reader.read_line(&mut buffer).await? > 0 {
             let trimmed = buffer.trim();
             if !trimmed.is_empty() {
-                match self.handle_message(trimmed).await {
+                match Self::handle_message(trimmed, &tool_registry, &resource_registry).await {
                     Ok(response) => {
                         writer.write_all(response.as_bytes()).await?;
                     }
@@ -121,16 +111,28 @@ impl McpServer {
         Ok(())
     }
 
-    async fn handle_message(&self, message: &str) -> Result<String> {
+    /// Processes a single JSON-RPC message
+    ///
+    /// Parses the message and dispatches to appropriate handler based on method.
+    ///
+    /// # Arguments
+    ///
+    /// * `message` - The JSON-RPC message string
+    /// * `tool_registry` - Registry of available tools
+    /// * `resource_registry` - Registry of available resources
+    async fn handle_message(
+        message: &str,
+        tool_registry: &ToolRegistry,
+        resource_registry: &ResourceRegistry,
+    ) -> Result<String> {
         let mcp_msg: McpMessage = serde_json::from_str(message)?;
 
         let response = match mcp_msg.method.as_str() {
-            "tools/list" => self.handle_list_tools(mcp_msg.id).await?,
-            "tools/call" => self.handle_call_tool(mcp_msg.params, mcp_msg.id).await?,
-            "resources/list" => self.handle_list_resources(mcp_msg.id).await?,
-            "resources/read" => self.handle_read_resource(mcp_msg.params, mcp_msg.id).await?,
+            "tools/list" => Self::handle_list_tools(tool_registry, mcp_msg.id).await?,
+            "tools/call" => Self::handle_call_tool(tool_registry, mcp_msg.params, mcp_msg.id).await?,
+            "resources/list" => Self::handle_list_resources(resource_registry, mcp_msg.id).await?,
+            "resources/read" => Self::handle_read_resource(resource_registry, mcp_msg.params, mcp_msg.id).await?,
             _ => {
-                // 错误响应
                 serde_json::json!({
                     "jsonrpc": "2.0",
                     "error": {
@@ -146,8 +148,19 @@ impl McpServer {
         Ok(response)
     }
 
-    async fn handle_list_tools(&self, id: Option<u64>) -> Result<String> {
-        let tools = self.tools.values().cloned().collect();
+    /// Handles `tools/list` RPC method
+    ///
+    /// Returns a JSON-RPC response containing all available tools.
+    ///
+    /// # Arguments
+    ///
+    /// * `tool_registry` - Registry of available tools
+    /// * `id` - JSON-RPC request ID
+    async fn handle_list_tools(
+        tool_registry: &ToolRegistry,
+        id: Option<u64>,
+    ) -> Result<String> {
+        let tools = tool_registry.list_tools();
         let result = ListToolsResult { tools };
 
         Ok(serde_json::json!({
@@ -158,14 +171,48 @@ impl McpServer {
         .to_string())
     }
 
-    async fn handle_call_tool(&self, params: Value, id: Option<u64>) -> Result<String> {
+    /// Handles `tools/call` RPC method
+    ///
+    /// Invokes a tool with the provided arguments and returns the result.
+    ///
+    /// # Arguments
+    ///
+    /// * `tool_registry` - Registry of available tools
+    /// * `params` - RPC parameters containing tool name and arguments
+    /// * `id` - JSON-RPC request ID
+    async fn handle_call_tool(
+        tool_registry: &ToolRegistry,
+        params: Value,
+        id: Option<u64>,
+    ) -> Result<String> {
         let request: CallToolRequest = serde_json::from_value(params)?;
 
-        let result = match request.name.as_str() {
-            "search_files" => self.handle_search_files(request.arguments).await?,
-            "get_weather" => self.handle_get_weather(request.arguments).await?,
-            _ => {
-                return Ok(serde_json::json!({
+        match tool_registry.get(&request.name) {
+            Some(tool) => {
+                match tool.execute(request.arguments).await {
+                    Ok(result) => {
+                        Ok(serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "result": result,
+                            "id": id
+                        })
+                        .to_string())
+                    }
+                    Err(e) => {
+                        Ok(serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "error": {
+                                "code": -32602,
+                                "message": format!("工具执行失败: {}", e)
+                            },
+                            "id": id
+                        })
+                        .to_string())
+                    }
+                }
+            }
+            None => {
+                Ok(serde_json::json!({
                     "jsonrpc": "2.0",
                     "error": {
                         "code": -32601,
@@ -175,7 +222,23 @@ impl McpServer {
                 })
                 .to_string())
             }
-        };
+        }
+    }
+
+    /// Handles `resources/list` RPC method
+    ///
+    /// Returns a JSON-RPC response containing all available resources.
+    ///
+    /// # Arguments
+    ///
+    /// * `resource_registry` - Registry of available resources
+    /// * `id` - JSON-RPC request ID
+    async fn handle_list_resources(
+        resource_registry: &ResourceRegistry,
+        id: Option<u64>,
+    ) -> Result<String> {
+        let resources = resource_registry.list_resources();
+        let result = ListResourcesResult { resources };
 
         Ok(serde_json::json!({
             "jsonrpc": "2.0",
@@ -185,34 +248,35 @@ impl McpServer {
         .to_string())
     }
 
-    async fn handle_list_resources(&self, id: Option<u64>) -> Result<String> {
-        let result = ListResourcesResult {
-            resources: self.resources.clone(),
-        };
-
-        Ok(serde_json::json!({
-            "jsonrpc": "2.0",
-            "result": result,
-            "id": id
-        })
-        .to_string())
-    }
-
-    async fn handle_read_resource(&self, params: Value, id: Option<u64>) -> Result<String> {
+    /// Handles `resources/read` RPC method
+    ///
+    /// Reads a resource and returns its content.
+    ///
+    /// # Arguments
+    ///
+    /// * `resource_registry` - Registry of available resources
+    /// * `params` - RPC parameters containing resource URI
+    /// * `id` - JSON-RPC request ID
+    async fn handle_read_resource(
+        resource_registry: &ResourceRegistry,
+        params: Value,
+        id: Option<u64>,
+    ) -> Result<String> {
         let request: ReadResourceRequest = serde_json::from_value(params)?;
 
-        // 这里实现资源读取逻辑
-        let content = match request.uri.as_str() {
-            "file:///etc/hosts" => {
-                // 读取示例文件内容
-                let text = "127.0.0.1 localhost\n::1 localhost\n".to_string();
-                vec![Content {
-                    type_: "text".to_string(),
-                    text,
-                }]
+        match resource_registry.read_resource(&request.uri).await {
+            Ok(contents) => {
+                Ok(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "result": {
+                        "contents": contents
+                    },
+                    "id": id
+                })
+                .to_string())
             }
-            _ => {
-                return Ok(serde_json::json!({
+            Err(_) => {
+                Ok(serde_json::json!({
                     "jsonrpc": "2.0",
                     "error": {
                         "code": -32602,
@@ -222,60 +286,22 @@ impl McpServer {
                 })
                 .to_string())
             }
-        };
-
-        Ok(serde_json::json!({
-            "jsonrpc": "2.0",
-            "result": {
-                "contents": content
-            },
-            "id": id
-        })
-        .to_string())
-    }
-
-    async fn handle_search_files(&self, arguments: Value) -> Result<CallToolResult> {
-        let pattern = arguments["pattern"]
-            .as_str()
-            .context("缺少 pattern 参数")?;
-        let directory = arguments["directory"]
-            .as_str()
-            .unwrap_or(".");
-
-        // 模拟文件搜索
-        let text = format!("在目录 {} 中搜索模式 '{}'\n找到以下文件:\n1. /path/to/file1.txt\n2. /path/to/file2.log",
-            directory, pattern);
-
-        Ok(CallToolResult {
-            content: vec![Content {
-                type_: "text".to_string(),
-                text,
-            }],
-        })
-    }
-
-    async fn handle_get_weather(&self, arguments: Value) -> Result<CallToolResult> {
-        let city = arguments["city"]
-            .as_str()
-            .context("缺少 city 参数")?;
-
-        // 模拟天气查询
-        let text = format!("{} 的天气:\n温度: 22°C\n天气: 晴朗\n湿度: 65%", city);
-
-        Ok(CallToolResult {
-            content: vec![Content {
-                type_: "text".to_string(),
-                text,
-            }],
-        })
-    }
-}
-
-impl Clone for McpServer {
-    fn clone(&self) -> Self {
-        McpServer {
-            tools: self.tools.clone(),
-            resources: self.resources.clone(),
         }
     }
+
+    /// Creates a clone of the tool registry
+    ///
+    /// Used for passing to spawned async tasks.
+    fn clone_tool_registry(&self) -> ToolRegistry {
+        ToolRegistry::new()
+    }
+
+    /// Creates a clone of the resource registry
+    ///
+    /// Used for passing to spawned async tasks.
+    fn clone_resource_registry(&self) -> ResourceRegistry {
+        ResourceRegistry::new()
+    }
 }
+
+
