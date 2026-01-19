@@ -103,31 +103,12 @@ impl McpServer {
         let mut reader = BufReader::new(reader);
         let mut buffer = String::new();
 
-        // 发送初始化消息
-        let init_message = serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {
-                    "tools": {},
-                    "resources": {}
-                }
-            },
-            "id": 1
-        });
-
-        writer
-            .write_all(format!("{}\n", init_message.to_string()).as_bytes())
-            .await?;
-
         while reader.read_line(&mut buffer).await? > 0 {
             let trimmed = buffer.trim();
             if !trimmed.is_empty() {
                 match self.handle_message(trimmed).await {
                     Ok(response) => {
                         writer.write_all(response.as_bytes()).await?;
-                        writer.write_all(b"\n").await?;
                     }
                     Err(e) => {
                         eprintln!("处理消息失败: {}", e);
