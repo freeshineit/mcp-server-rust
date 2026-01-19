@@ -43,6 +43,7 @@ pub struct Resource {
 pub struct McpMessage {
     pub jsonrpc: String,
     pub method: String,
+    #[serde(default)]
     pub params: serde_json::Value,
     pub id: Option<u64>,
 }
